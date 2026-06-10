@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: luacheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua & luacheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lua5.3 luarocks 2>/dev/null
+          sudo luarocks install luacheck 2>/dev/null
+      - name: Lint
+        run: luacheck rime_context_filter.lua --std luacheck --no-max-line-length || true
+
+  test:
+    name: Test (Lua 5.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.3
+      - name: Run tests
+        run: lua5.3 test_rime_context_filter.lua
+
+  test-luajit:
+    name: Test (LuaJIT)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LuaJIT
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq luajit
+      - name: Run tests
+        run: luajit test_rime_context_filter.lua
+
+  test-lua51:
+    name: Test (Lua 5.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lua5.1
+      - name: Run tests
+        run: lua5.1 test_rime_context_filter.lua

@@ -31,9 +31,23 @@ local function get_data_path(env)
   if sep == "\\" then
     return (os.getenv("APPDATA") or "") .. sep .. "Rime" .. sep .. "context_learned.data"
   end
-  -- macOS / Linux
+  -- macOS: ~/Library/Rime/（检测目录或通过 sw_vers 确认平台）
   local home = os.getenv("HOME") or ""
-  return home .. "/Library/Rime/context_learned.data"
+  if os.execute('test -d "' .. home .. '/Library/Rime" 2>/dev/null') == 0 then
+    return home .. "/Library/Rime/context_learned.data"
+  end
+  -- 首次部署时 ~/Library/Rime/ 可能尚未创建，通过 macOS 独有文件确认
+  if os.execute('test -f /usr/bin/sw_vers 2>/dev/null') == 0 then
+    return home .. "/Library/Rime/context_learned.data"
+  end
+
+  -- Linux: 优先 XDG_DATA_HOME
+  local xdg = os.getenv("XDG_DATA_HOME")
+  if xdg and #xdg > 0 then
+    return xdg .. "/rime/context_learned.data"
+  end
+  -- Linux fallback: $HOME/.local/share/rime/
+  return home .. "/.local/share/rime/context_learned.data"
 end
 
 ----------------------------------------------------------------------
@@ -55,11 +69,11 @@ local function serialize(data)
   local buf = { "return {\n" }
   for ctx, words in pairs(data) do
     local first = true
-    buf[#buf + 1] = "  " .. esc(ctx) .. "={"
+    buf[#buf + 1] = "  [" .. esc(ctx) .. "]={"
     for word, count in pairs(words) do
       if count > 1 then  -- 写入时即剪枝
         if first then first = false else buf[#buf + 1] = "," end
-        buf[#buf + 1] = esc(word) .. "=" .. count
+        buf[#buf + 1] = "[" .. esc(word) .. "]=" .. count
       end
     end
     if first then
@@ -87,8 +101,13 @@ local function load(data_file)
   -- Lua 5.1/LuaJIT: load(chunk, name) only — no sandbox parameter
   local loader, err = load(content, "@" .. data_file, "t", safe_env)
   if not loader then
-    -- Fallback for older Lua versions
+    -- Lua 5.1/LuaJIT 降级（无沙箱参数）
     loader, err = load(content, "@" .. data_file)
+    if loader then
+      io.stderr:write("[rime-context-filter] WARNING: " ..
+        "Sandbox unavailable on Lua 5.1/LuaJIT. " ..
+        "Data file could access global environment.\n")
+    end
   end
   if not loader then return {}, 0 end
   local ok, data = pcall(loader)
@@ -163,13 +182,36 @@ local function decay_learned(learned, rate)
 end
 
 ----------------------------------------------------------------------
--- 上下文评分（热路径，减少 GC）
+-- UTF-8 安全截取（按字符边界，非字节）
 ----------------------------------------------------------------------
 
-local function score_candidates(candidates, window, learned)
-  local scores = {}
+--- 安全截取字符串末尾 N 个字符
+local function utf8_last(s, n)
+  local len = #s
+  if len == 0 then return s end
+  local pos = len + 1
+  for i = 1, n do
+    if pos <= 1 then break end
+    pos = pos - 1
+    -- 跳过 utf-8 连续字节 (0x80-0xBF)
+    while pos > 1 and s:byte(pos) >= 0x80 and s:byte(pos) < 0xC0 do
+      pos = pos - 1
+    end
+  end
+  if pos < 1 then pos = 1 end
+  return s:sub(pos)
+end
+
+----------------------------------------------------------------------
+-- 上下文评分（热路径）
+----------------------------------------------------------------------
+
+local function score_candidates(candidates, window, learned, scores)
+  -- 清空复用表
+  for k in pairs(scores) do scores[k] = nil end
+
   local last = window[#window]
-  if not last or #last == 0 then return scores end
+  if not last or #last == 0 then return end
 
   local function apply_weight(key, weight)
     local e = learned[key]
@@ -183,12 +225,11 @@ local function score_candidates(candidates, window, learned)
   end
 
   apply_weight(last, 1.0)
-  if #last >= 6 then apply_weight(last:sub(-6), 0.5) end  -- ~2 CJK chars
-  if #last >= 3 then apply_weight(last:sub(-3), 0.25) end -- ~1 CJK char
+  if #last >= 6 then apply_weight(utf8_last(last, 2), 0.5) end  -- ~2 CJK chars
+  if #last >= 3 then apply_weight(utf8_last(last, 1), 0.25) end -- ~1 CJK char
   if #window >= 2 then
     apply_weight(window[#window - 1] .. last, 0.4)
   end
-  return scores
 end
 
 ----------------------------------------------------------------------
@@ -202,7 +243,8 @@ local function init(env)
   -- 跨平台数据路径
   env.data_file = get_data_path(env)
 
-  env.save_interval = config:get_int(env.name_space .. "/save_interval") or 30
+  local interval = config:get_int(env.name_space .. "/save_interval")
+  env.save_interval = (interval ~= nil) and interval or 30
 
   -- 衰减配置
   env.decay_enabled = config:get_bool(env.name_space .. "/decay_enabled")
@@ -217,6 +259,7 @@ local function init(env)
   env.learned, env.entry_count = load(env.data_file)
 
   -- 会话级新增缓冲
+  env.scores = {}
   env.pending = {}
   env.commit_count = 0
 
@@ -284,7 +327,8 @@ local function filter(input, env)
   end
   if #candidates == 0 then return end
 
-  local scores = score_candidates(candidates, env.window, env.learned)
+  score_candidates(candidates, env.window, env.learned, env.scores)
+  local scores = env.scores
 
   -- 阈值 2.0（同一搭配选 2 次以上才生效）
   local max_score = 0
@@ -313,4 +357,9 @@ end
 return {
   init = init,
   func = filter,
+  -- 以下仅用于测试
+  utf8_last = utf8_last,
+  serialize = serialize,
+  decay_learned = decay_learned,
+  score_candidates = score_candidates,
 }
