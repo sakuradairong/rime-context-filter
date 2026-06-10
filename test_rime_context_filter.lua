@@ -93,7 +93,12 @@ check(ser:match("^return%s*{"), "starts with return {")
 check(ser:match("}\n$"), "ends with }\\n")
 
 -- 通过 Lua VM 验证语法正确性
-local fn, err = load(ser)
+local fn, err
+if _VERSION == "Lua 5.1" then
+  fn, err = loadstring(ser)
+else
+  fn, err = load(ser)
+end
 check(fn ~= nil, "serialized output is valid Lua (" .. tostring(err) .. ")")
 if fn then
   local ok2, loaded = pcall(fn)
@@ -109,7 +114,12 @@ end
 local empty_ser = serialize({})
 check(empty_ser:match("^return {"), "empty starts with return {")
 check(empty_ser:match("}\n$"), "empty ends with }\\n")
-local fn2, err2 = load(empty_ser)
+local fn2, err2
+if _VERSION == "Lua 5.1" then
+  fn2, err2 = loadstring(empty_ser)
+else
+  fn2, err2 = load(empty_ser)
+end
 check(fn2 ~= nil, "empty output is valid Lua (" .. tostring(err2) .. ")")
 if fn2 then
   local ok3, empty_data = pcall(fn2)

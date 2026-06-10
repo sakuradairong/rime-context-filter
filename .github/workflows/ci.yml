@@ -12,11 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Lua & luacheck
+      - name: Install Lua & luarocks
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq lua5.3 luarocks 2>/dev/null
-          sudo luarocks install luacheck 2>/dev/null
+      - name: Install luacheck
+        continue-on-error: true
+        run: sudo luarocks install luacheck 2>&1
       - name: Lint
         run: luacheck rime_context_filter.lua --std luacheck --no-max-line-length || true
 

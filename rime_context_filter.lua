@@ -97,18 +97,29 @@ local function load(data_file)
   if not content or #content == 0 then return {}, 0 end
 
   local safe_env = {}
-  -- Lua 5.3+: load(chunk, name, mode, env)
-  -- Lua 5.1/LuaJIT: load(chunk, name) only — no sandbox parameter
-  local loader, err = load(content, "@" .. data_file, "t", safe_env)
-  if not loader then
-    -- Lua 5.1/LuaJIT 降级（无沙箱参数）
-    loader, err = load(content, "@" .. data_file)
+  local loader, err
+
+  if _VERSION == "Lua 5.1" then
+    -- Lua 5.1: load() accepts function only; loadstring for string chunks
+    loader, err = loadstring(content, "@" .. data_file)
     if loader then
       io.stderr:write("[rime-context-filter] WARNING: " ..
-        "Sandbox unavailable on Lua 5.1/LuaJIT. " ..
+        "Sandbox unavailable on Lua 5.1. " ..
         "Data file could access global environment.\n")
     end
+  else
+    -- Lua 5.3+: load(chunk, name, mode, env) with sandbox
+    loader, err = load(content, "@" .. data_file, "t", safe_env)
+    if not loader then
+      -- Fallback for embedders without 4-arg load
+      loader, err = load(content, "@" .. data_file)
+      if loader then
+        io.stderr:write("[rime-context-filter] WARNING: " ..
+          "Sandbox unavailable, data file could access global environment.\n")
+      end
+    end
   end
+
   if not loader then return {}, 0 end
   local ok, data = pcall(loader)
   if not ok or type(data) ~= "table" then return {}, 0 end
